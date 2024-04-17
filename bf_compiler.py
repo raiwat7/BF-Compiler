@@ -1,6 +1,7 @@
 import argparse
 import ctypes
 import sys
+import os
 
 from llvmlite import ir, binding as llvm
 
@@ -99,9 +100,55 @@ def bfToIntermediateRepresentation(bf_code):
     def compile_instruction(single_instruction):
         # checking if the given instruction has loop
         if isinstance(single_instruction, list):
-            # TODO: We should define our own pass order.
-            print("Looping statements do not work yet")
+            # creating a basic block for beginning of the loop
+            preloop = builder.append_basic_block(name="preloop")
 
+            # In the LLVM IR, every block needs to be terminated. Our builder
+            # is still at the end of the previous block, so we can just insert
+            # an unconditional branching to the preloop branch.
+
+            # branches control flow to the preloop block
+            builder.branch(preloop)
+
+            # This sets the insertion point for new instructions to the beginning of the
+            # preloop block
+            builder.position_at_start(preloop)
+
+            # load tape value
+            location = get_tape_location()
+            tape_value = builder.load(location)
+
+            # check tape value
+            is_zero = builder.icmp_unsigned("==", tape_value, zero8)
+
+            # We'll now create *another* block, but we won't terminate the
+            # "preloop" block until later. This is because we need a reference
+            # to both the "body" and the "postloop" block to know where to
+            # jump.
+
+            # This creates a basic block body for the loop body and sets the insertion
+            # point for new instructions to the beginning of the boy block
+            body = builder.append_basic_block(name="body")
+            builder.position_at_start(body)
+            for inner_instruction in single_instruction:
+                # iterating over each single_instruction in the loop and compiling it recursively
+                compile_instruction(inner_instruction)
+
+            # branches control flow to the preloop block
+            builder.branch(preloop)
+
+            # create a basic block for the end of the loop
+            postloop = builder.append_basic_block(name="postloop")
+
+            # sets the insertion point for new instructions to the end of the preloop block
+            # Termination of preloop
+            builder.position_at_end(preloop)
+
+            # conditional branch....if is zero, go to post loop....else continue in loop
+            builder.cbranch(is_zero, postloop, body)
+
+            # sets the insertion point for new instructions to the start of the postloop block
+            builder.position_at_start(postloop)
         elif single_instruction == "+" or single_instruction == "-":
             location = get_tape_location()
             value = builder.load(location)
@@ -170,8 +217,12 @@ def main():
 
     argp.add_argument("filename",
                       help="The brainfuck code file.")
+    argp.add_argument("-i", "--ir", action="store_true",
+                      help="Print out the human-readable LLVM IR to stderr")
     argp.add_argument('-r', '--run', action="store_true",
                       help="Run the brainfuck code with McJIT.")
+    argp.add_argument('-c', '--bitcode', action="store_true",
+                      help="Emit a bitcode file.")
 
     argv = argp.parse_args()
 
@@ -182,8 +233,25 @@ def main():
     with open(argv.filename) as bf_file:
         ir_module = bfToIntermediateRepresentation(bf_file.read())
 
+    basename = os.path.basename(argv.filename)
+    basename = os.path.splitext(basename)[0]
+
+    if argv.ir:
+        with open(basename + ".ll", "w") as f:
+            f.write(str(ir_module))
+
+        print("Wrote IR to", basename + ".ll")
+
     binding_module = llvm.parse_assembly(str(ir_module))
     binding_module.verify()
+
+    if argv.bitcode:
+        bitcode = binding_module.as_bitcode()
+
+        with open(basename + ".bc", "wb") as output_file:
+            output_file.write(bitcode)
+
+        print("Wrote bitcode to", basename + ".bc")
 
     if argv.run:
         with create_execution_engine() as engine:
