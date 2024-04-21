@@ -11,7 +11,6 @@ INDEX_BIT_SIZE = 16
 def generateAbstractSyntaxTree(bf_code):
     bf_code = iter(bf_code)
     abstractSyntaxTree = []
-
     for c in bf_code:
         if c == "[":
             abstractSyntaxTree.append(generateAbstractSyntaxTree(bf_code))
